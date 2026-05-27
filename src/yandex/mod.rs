@@ -1,27 +1,28 @@
-use reqwest::header::{AUTHORIZATION, HeaderValue};
+use std::time::Instant;
+use std::error::Error;
 use std::collections::HashMap;
 use std::{env};
+use reqwest::Url;
+use reqwest::header::{AUTHORIZATION, HeaderValue};
+use serde_json::Value;
+use crate::get_reqwest_client;
+use crate::storage::{ save_file};
 
-use std::error::Error;
+// =====================================================================================================================
+
 const LIMIT: &str = "100000";
 const YANDEX_APP_URL: &str = "https://cloud-api.yandex.net/v1/disk/resources";
 
+// =====================================================================================================================
+
 async fn fetch_metadata() -> Result<HashMap<String, serde_json::Value>, Box<dyn Error>>  {
-    let yandex_token = match env::var("YANDEX_TOKEN") {
-        Ok(token) => token,
-        Err(_) => return  Err("YANDEX_TOKEN is not set into .env file".into())
-    };
+    let mut url = Url::parse(YANDEX_APP_URL)?;
+    url.query_pairs_mut()
+    .append_pair("limit", LIMIT)
+    .append_pair("path", "app:/");
 
-    let auth_value = format!("OAuth {}", yandex_token);
-    let client = reqwest::Client::new();
 
-    let resp = client
-        .get(format!("{}?limit={}&path=app:/",YANDEX_APP_URL, LIMIT))
-        .header(AUTHORIZATION, HeaderValue::from_str(&auth_value)?)
-        .send()
-        .await?
-        .json::<HashMap<String, serde_json::Value>>()
-        .await?;
+    let resp  = fetch(url, None).await?;
 
     if resp.contains_key("error") {
         let err_msg = resp.get("message")
@@ -32,22 +33,6 @@ async fn fetch_metadata() -> Result<HashMap<String, serde_json::Value>, Box<dyn 
     }
 
     Ok(resp)
-}
-
-
-#[derive(Debug)]
-pub struct CloudItem {
-    pub name: String,
-    pub is_dir: bool,
-    pub size: u64,
-    pub path: String
-}
-
-#[derive(Debug)]
-struct ParsedResult {
-    pub audio: Vec<CloudItem>,
-    pub image: Vec<CloudItem>,
-    pub video: Vec<CloudItem>
 }
 
 fn parse_response(response: HashMap<String, serde_json::Value>) -> Result<ParsedResult, Box<dyn Error>> {
@@ -89,13 +74,13 @@ fn parse_response(response: HashMap<String, serde_json::Value>) -> Result<Parsed
 
                 if !name.is_empty() {
                     if media_type == "audio" {
-                        result.audio.push(CloudItem { name, is_dir, size, path });
+                        result.audio.push(CloudItem { name, is_dir, size, path, media_type });
                     } 
                     else if media_type == "image" {
-                        result.image.push(CloudItem { name, is_dir, size, path });
+                        result.image.push(CloudItem { name, is_dir, size, path, media_type });
                     }
                     else if media_type =="video" {
-                        result.video.push(CloudItem { name, is_dir, size, path });
+                        result.video.push(CloudItem { name, is_dir, size, path, media_type });
                     }
                 }
             }
@@ -107,10 +92,115 @@ fn parse_response(response: HashMap<String, serde_json::Value>) -> Result<Parsed
     Ok(result)
 }
 
-
-pub async fn execute_with_yandex() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn execute_with_yandex() -> Result<ParsedResult, Box<dyn std::error::Error>> {
     let resp = fetch_metadata().await?;
     let parsed_response = parse_response(resp)?;
-    println!("[mod]: {:#?}", parsed_response);
+    Ok(parsed_response)
+}
+
+pub async fn download(paths: Vec<CloudItem>) -> Result<(), Box<dyn Error>> {
+    let client = get_reqwest_client();
+    let base_url = Url::parse("https://cloud-api.yandex.net/v1/disk/resources/download")?;
+
+    for cloud_item in paths {
+        let url = base_url.clone();
+        let params = [("path", cloud_item.path.as_str())];
+        let response = fetch(url, Some(&params)).await?;
+
+        if let Some(download_url) = response.get("href").and_then(|v| v.as_str()) {
+            println!("[DOWNLOAD] starting download: {:?}", cloud_item.name);
+            let start_time = Instant::now();
+
+            let file_response = match client.get(download_url).send().await {
+                Ok(res) => res,
+                Err(e) => {
+                    println!("[ERROR] download failed: {}, {}", cloud_item.name, e);
+                    continue;
+                }
+            };
+
+            let bytes = match file_response.bytes().await {
+                Ok(b) => b,
+                Err(_) => {
+                    println!("[ERROR] failed read bytes from file: {}", cloud_item.name);
+                    continue;
+                }
+            };
+
+            //Stats
+            // =========================================================================================================
+
+            let duration = start_time.elapsed();
+            let bytes_len = bytes.len();
+            let megabytes = bytes_len as f64 / 1_048_576.0;
+            let seconds = duration.as_secs_f64();
+            let speed = if seconds > 0.0 { megabytes / seconds } else { 0.0 };
+
+            // =========================================================================================================
+
+            println!(
+                "[STATS] Downloaded {:.2} MB in {:.2}s | Speed: {:.2} MB/s", 
+                megabytes, seconds, speed
+            );
+
+            match save_file(cloud_item, bytes).await {
+                Ok(()) => {
+                    println!("[SUCCESS] file is saved successfully")
+                },
+                Err(e) => {
+                    println!("[ERROR] failed save file: {}", e);
+                    continue;
+                }
+            };
+
+            
+
+        } 
+    }
+
     Ok(())
+}
+
+async fn fetch(mut path: Url, query: Option<&[(&str, &str)]>) -> Result<HashMap<String, Value>, Box<dyn std::error::Error>> {
+    let yandex_token = env::var("YANDEX_TOKEN")
+        .map_err(|_| "YANDEX_TOKEN is not set into .env file")?;
+
+    if let Some(params) = query {
+            let mut pairs = path.query_pairs_mut();
+            for &(key, val) in params {
+                pairs.append_pair(key, val);
+            }
+        }
+
+    let auth_value = format!("OAuth {}", yandex_token);
+
+    let client = get_reqwest_client();
+    
+    let resp = client
+        .get(path) 
+        .header(AUTHORIZATION, HeaderValue::from_str(&auth_value)?)
+        .send()
+        .await?
+        .json::<HashMap<String, Value>>()
+        .await?;
+
+    Ok(resp)
+}
+
+// Structures
+// =====================================================================================================================
+#[derive(Debug)]
+pub struct CloudItem {
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub path: String,
+    pub media_type: String
+}
+
+#[derive(Debug,Default)]
+pub struct ParsedResult {
+    pub audio: Vec<CloudItem>,
+    pub image: Vec<CloudItem>,
+    pub video: Vec<CloudItem>
 }

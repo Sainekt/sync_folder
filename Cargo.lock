@@ -1150,11 +1150,11 @@ dependencies = [
 name = "sync_folder"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "dotenv",
  "reqwest",
  "serde_json",
  "tokio",
- "walkdir",
 ]
 
 [[package]]
