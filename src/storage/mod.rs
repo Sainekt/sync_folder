@@ -1,5 +1,5 @@
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::error::Error;
 use std::path::PathBuf;
@@ -26,8 +26,9 @@ impl DirNames {
     }
 }
 
-pub fn scan_directories(dir: DirNames) -> Result<HashSet<String>, Box<dyn Error>>{
-    let mut file_names: HashSet<String> = HashSet::new();
+
+pub fn scan_directories(dir: DirNames) -> Result<HashMap<String, PathBuf>, Box<dyn Error>> {
+    let mut file_map: HashMap<String, PathBuf> = HashMap::new();
 
     let folder = dir.as_str();
     let target_path = format!("./static/{}", folder);
@@ -37,15 +38,20 @@ pub fn scan_directories(dir: DirNames) -> Result<HashSet<String>, Box<dyn Error>
     })?;
 
     println!("[INFO] Starting scan directory: {:?}", dir);
+    
     for entry in fs::read_dir(&target_path)? {
-            let entry = entry?;
-            
-            if entry.path().is_file() {
-                file_names.insert(entry.file_name().to_string_lossy().into_owned());
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() {
+            if let Some(os_str) = path.file_name() {
+                let name = os_str.to_string_lossy().into_owned();
+                file_map.insert(name, path);
             }
         }
+    }
 
-    Ok(file_names)
+    Ok(file_map)
 }
 
 

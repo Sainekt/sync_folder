@@ -1,41 +1,61 @@
+use std::path::PathBuf;
 use std::time::Instant;
 use std::error::Error;
-use std::collections::HashMap;
+use std::collections::{HashMap};
 use std::{env};
-use reqwest::Url;
+use reqwest::{ StatusCode, Url};
 use reqwest::header::{AUTHORIZATION, HeaderValue};
+use reqwest::Method;
 use serde_json::Value;
 use crate::get_reqwest_client;
-use crate::storage::{ save_file};
+use crate::storage::{ DirNames, save_file};
 
 // =====================================================================================================================
 
 const LIMIT: &str = "100000";
-const YANDEX_APP_URL: &str = "https://cloud-api.yandex.net/v1/disk/resources";
+const YANDEX_URL: &str = "https://cloud-api.yandex.net/v1/disk/resources";
 
 // =====================================================================================================================
 
-async fn fetch_metadata() -> Result<HashMap<String, serde_json::Value>, Box<dyn Error>>  {
-    let mut url = Url::parse(YANDEX_APP_URL)?;
-    url.query_pairs_mut()
-    .append_pair("limit", LIMIT)
-    .append_pair("path", "app:/");
+pub async fn fetch_metadata(dir: DirNames) -> Result<HashMap<String, serde_json::Value>, Box<dyn Error>>  {
+    let mut url = Url::parse(YANDEX_URL)?;
+        url.query_pairs_mut()
+        .append_pair("limit", LIMIT)
+        .append_pair("path", &format!("app:/{}", dir.as_str()));
+    
+    let (status, response)  = fetch(url,Method::GET, None).await?;
 
+    if status == reqwest::StatusCode::OK {
+            return Ok(response);
+        }
 
-    let resp  = fetch(url, None).await?;
+    
+    if status == reqwest::StatusCode::NOT_FOUND {
+        match create_cloud_dir(dir).await {
+                    Ok(_) => {
+                        println!("[INFO] Directory successfully created");
+                        let fake_json = serde_json::json!({
+                            "_embedded": {
+                                "items": []
+                            }
+                        });
 
-    if resp.contains_key("error") {
-        let err_msg = resp.get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Unknown error from Yandex_api");
+                        return Ok(fake_json.as_object().unwrap().clone().into_iter().collect());
+                    },
+                    Err(e) => {
+                        return Err(format!("[ERROR] failed create directory: {}", e).into());
+                    }
+                }
+    } 
 
-        return Err(format!("Yandex_api returned error: {}", err_msg).into());
-    }
-
-    Ok(resp)
+    let err_msg = response.get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown error from Yandex_api");
+    
+    Err(format!("Yandex_api returned error: {}", err_msg).into())
 }
 
-fn parse_response(response: HashMap<String, serde_json::Value>) -> Result<ParsedResult, Box<dyn Error>> {
+pub fn parse_response(response: HashMap<String, serde_json::Value>) -> Result<ParsedResult, Box<dyn Error>> {
     let mut result: ParsedResult = ParsedResult {
         audio: Vec::new(),
         image: Vec::new(),
@@ -92,11 +112,6 @@ fn parse_response(response: HashMap<String, serde_json::Value>) -> Result<Parsed
     Ok(result)
 }
 
-pub async fn execute_with_yandex() -> Result<ParsedResult, Box<dyn std::error::Error>> {
-    let resp = fetch_metadata().await?;
-    let parsed_response = parse_response(resp)?;
-    Ok(parsed_response)
-}
 
 pub async fn download(paths: Vec<CloudItem>) -> Result<(), Box<dyn Error>> {
     let client = get_reqwest_client();
@@ -105,7 +120,7 @@ pub async fn download(paths: Vec<CloudItem>) -> Result<(), Box<dyn Error>> {
     for cloud_item in paths {
         let url = base_url.clone();
         let params = [("path", cloud_item.path.as_str())];
-        let response = fetch(url, Some(&params)).await?;
+        let response = fetch(url,Method::GET,  Some(&params)).await?.1;
 
         if let Some(download_url) = response.get("href").and_then(|v| v.as_str()) {
             println!("[DOWNLOAD] starting download: {:?}", cloud_item.name);
@@ -161,12 +176,66 @@ pub async fn download(paths: Vec<CloudItem>) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn fetch(mut path: Url, query: Option<&[(&str, &str)]>) -> Result<HashMap<String, Value>, Box<dyn std::error::Error>> {
+pub async fn upload(dir: DirNames, to_upload: HashMap<String, PathBuf>) -> Result<(), Box<dyn Error>> {
+    let client = get_reqwest_client();
+
+    for (file_name, file_path) in to_upload {
+        let mut url = Url::parse(&format!("{}/upload", YANDEX_URL))?;
+        url.query_pairs_mut()
+            .append_pair("path", &format!("app:/{}/{}", dir.as_str(), file_name));
+
+        let (status, response) = fetch(url, Method::GET, None).await?;
+
+        if status != reqwest::StatusCode::OK {
+            let err_msg = response.get("message")
+                .and_then(|v| v.as_str()).unwrap_or("No message");
+            return Err(format!("[ERROR] Upload link is not get, Status: {} message: {:?}",status, err_msg).into());
+        }
+
+        let Some(upload_url) = response.get("href").and_then(|v| v.as_str()) else {
+            return  Err("[ERROR] Yandex response is missing 'href' field to upload".into());
+        };
+
+        println!("[UPLOAD] Preparing to upload: {}", file_name);
+                let start_time = Instant::now();
+
+        let file_bytes = std::fs::read(&file_path).map_err(|e| {
+            format!("Failed to read local file {:?}: {}", file_path, e)
+        })?;
+
+        let bytes_len = file_bytes.len();
+
+        let response = client
+            .put(upload_url)
+            .body(file_bytes)
+            .send()
+            .await
+            .map_err(|e| format!("Network error during upload for {}: {}", file_name, e))?;
+
+        if response.status() == StatusCode::CREATED || response.status() == StatusCode::ACCEPTED {
+            let duration = start_time.elapsed();
+            let megabytes = bytes_len as f64 / 1_048_576.0;
+            let seconds = duration.as_secs_f64();
+            let speed = if seconds > 0.0 { megabytes / seconds } else { 0.0 };
+
+            println!(
+                "[SUCCESS] Uploaded {:.2} MB in {:.2}s | Speed: {:.2} MB/s | File: {}", 
+                megabytes, seconds, speed, file_name
+            );
+        } else {
+            return Err(format!("Yandex rejected file {} with status: {}", file_name, response.status()).into());
+        }
+    }
+    Ok(())
+}
+
+async fn fetch(mut url: Url, method: reqwest::Method, query: Option<&[(&str, &str)]>)
+ -> Result<(StatusCode, HashMap<String, Value>), Box<dyn std::error::Error>> {
     let yandex_token = env::var("YANDEX_TOKEN")
         .map_err(|_| "YANDEX_TOKEN is not set into .env file")?;
 
     if let Some(params) = query {
-            let mut pairs = path.query_pairs_mut();
+            let mut pairs = url.query_pairs_mut();
             for &(key, val) in params {
                 pairs.append_pair(key, val);
             }
@@ -177,14 +246,31 @@ async fn fetch(mut path: Url, query: Option<&[(&str, &str)]>) -> Result<HashMap<
     let client = get_reqwest_client();
     
     let resp = client
-        .get(path) 
+        .request(method, url)
         .header(AUTHORIZATION, HeaderValue::from_str(&auth_value)?)
         .send()
-        .await?
-        .json::<HashMap<String, Value>>()
         .await?;
 
-    Ok(resp)
+    let status = resp.status();
+
+    let body = resp.
+        json::<HashMap<String, Value>>()
+        .await?;
+
+    Ok((status, body))
+}
+
+async fn create_cloud_dir(dir: DirNames) -> Result<StatusCode, Box<dyn Error>>{
+    let mut url = Url::parse(YANDEX_URL)?;
+        url.query_pairs_mut()
+        .append_pair("limit", LIMIT)
+        .append_pair("path", &format!("app:/{}", dir.as_str()));
+
+    let status = fetch(url, Method::PUT, None).await?.0;
+    if status != reqwest::StatusCode::CREATED {
+        return Err(format!("Failed to create directory status: {}", status).into());
+    }
+    Ok(status)
 }
 
 // Structures
