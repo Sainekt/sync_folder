@@ -1,19 +1,19 @@
 mod yandex;
 mod storage;
 
-use std::{collections::{HashMap}, path::PathBuf, sync::OnceLock};
+use std::{ collections::{ HashMap }, path::PathBuf, sync::OnceLock };
 
-use yandex::{fetch_metadata, parse_response, download};
+use yandex::{ fetch_metadata, parse_response, download };
 use storage::scan_directories;
 use dotenv::dotenv;
 
-use crate::{yandex::{CloudItem, upload}};
+use crate::{ yandex::{ CloudItem, upload } };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
 
-    let media_type = storage::DirNames::Image;
+    let media_type = storage::DirNames::Audio;
 
     let meta_data = fetch_metadata(media_type.clone()).await?;
     let parsed_yandex_response = parse_response(meta_data)?;
@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         storage::DirNames::Image => parsed_yandex_response.image,
         storage::DirNames::Video => parsed_yandex_response.video,
     };
-    
+
     let to_sync = get_to_download(to_sync_media_type, data_in_dir);
 
     download(to_sync.to_download).await?;
@@ -36,20 +36,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-
-
 #[derive(Debug)]
 pub struct SyncTasks {
     pub to_download: Vec<CloudItem>,
-    pub to_upload: HashMap<String, PathBuf>
+    pub to_upload: HashMap<String, PathBuf>,
 }
 
-fn get_to_download(from_drive: Vec<CloudItem>, mut data_in_dir: HashMap<String, PathBuf>) -> SyncTasks {
+fn get_to_download(
+    from_drive: Vec<CloudItem>,
+    mut data_in_dir: HashMap<String, PathBuf>
+) -> SyncTasks {
     let mut to_download = Vec::new();
-    
+
     for entry in from_drive {
         if data_in_dir.remove(&entry.name).is_some() {
-            continue; 
+            continue;
         }
         to_download.push(entry);
     }
@@ -57,8 +58,8 @@ fn get_to_download(from_drive: Vec<CloudItem>, mut data_in_dir: HashMap<String, 
     let to_upload = data_in_dir;
 
     println!(
-        "[INFO] To download {} files. To upload {} files.", 
-        to_download.len(), 
+        "[INFO] To download {} files. To upload {} files.",
+        to_download.len(),
         to_upload.len()
     );
 

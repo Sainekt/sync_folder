@@ -1,7 +1,6 @@
-
-use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::collections::HashMap;
 use std::error::Error;
+use std::fs;
 use std::path::PathBuf;
 
 use tokio::fs::File;
@@ -15,17 +14,16 @@ pub enum DirNames {
     Video,
     Image,
 }
+
 impl DirNames {
     pub fn as_str(&self) -> &'static str {
         match self {
             DirNames::Audio => "audio",
             DirNames::Video => "video",
             DirNames::Image => "image",
-            
         }
     }
 }
-
 
 pub fn scan_directories(dir: DirNames) -> Result<HashMap<String, PathBuf>, Box<dyn Error>> {
     let mut file_map: HashMap<String, PathBuf> = HashMap::new();
@@ -33,12 +31,11 @@ pub fn scan_directories(dir: DirNames) -> Result<HashMap<String, PathBuf>, Box<d
     let folder = dir.as_str();
     let target_path = format!("./static/{}", folder);
 
-    fs::create_dir_all(&target_path).map_err(|e| {
-        format!("Failed to create directory '{}': {}", target_path, e)
-    })?;
+    fs::create_dir_all(&target_path)
+        .map_err(|e| format!("Failed to create directory '{}': {}", target_path, e))?;
 
     println!("[INFO] Starting scan directory: {:?}", dir);
-    
+
     for entry in fs::read_dir(&target_path)? {
         let entry = entry?;
         let path = entry.path();
@@ -54,13 +51,12 @@ pub fn scan_directories(dir: DirNames) -> Result<HashMap<String, PathBuf>, Box<d
     Ok(file_map)
 }
 
-
-pub async fn save_file(file_info: CloudItem, bytes: bytes::Bytes ) -> Result<(), Box<dyn Error>> {
+pub async fn save_file(file_info: CloudItem, bytes: bytes::Bytes) -> Result<(), Box<dyn Error>> {
     let mut path = PathBuf::from("./static");
-        path.push(&file_info.media_type);
-        path.push(&file_info.name);
+    path.push(&file_info.media_type);
+    path.push(&file_info.name);
 
-        let mut file = File::create(&path).await?;
-        file.write_all(&bytes).await?;
-        Ok(())
+    let mut file = File::create(&path).await?;
+    file.write_all(&bytes).await?;
+    Ok(())
 }
