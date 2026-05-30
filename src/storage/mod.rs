@@ -31,7 +31,8 @@ pub fn scan_directories(dir: DirNames) -> Result<HashMap<String, PathBuf>, Box<d
     let folder = dir.as_str();
     let target_path = format!("./static/{}", folder);
 
-    fs::create_dir_all(&target_path)
+    fs
+        ::create_dir_all(&target_path)
         .map_err(|e| format!("Failed to create directory '{}': {}", target_path, e))?;
 
     println!("[INFO] Starting scan directory: {:?}", dir);
