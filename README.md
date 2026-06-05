@@ -1,6 +1,6 @@
 # Sync Folder CLI
 
-A command-line tool written in Rust for bi-directional file synchronization between a local machine and cloud storage.
+A command-line tool written in Rust for bi-directional file synchronization between a user-defined local directory and cloud storage.
 
 ## ⚠️ Current Support & Limitations
 
@@ -11,9 +11,9 @@ A command-line tool written in Rust for bi-directional file synchronization betw
 
 ## ⚙️ Principle of Operation
 
-1. **Local Storage (`static` folder):** Upon execution, the application automatically creates a folder named `static` in the exact same directory where the executable file is located. All synchronized content is stored inside this `static` directory.
+1. **Target Directory:** The application does not create any local directories automatically. The user must provide a path to an **already existing** local folder that will be used for scanning and saving files.
     
-2. **Delta Calculation:** The application scans the local `static` directory and compares its content with the sandboxed folder in the cloud. It accurately calculates which files are missing locally and which are missing in the cloud.
+2. **Delta Calculation:** The application scans the specified local directory and compares its content with the sandboxed folder in the cloud. It accurately calculates which files are missing locally (to download) and which are missing in the cloud (to upload).
     
 3. **Execution Control:** You can specify the maximum number of concurrent network requests (from 1 to 10) to control the bandwidth load.
     
@@ -41,8 +41,6 @@ Detailed official documentation is available here: [https://yandex.ru/dev/id/doc
 7. Open your web browser and navigate to the following URL, replacing `<ClientID>` with your copied value:
     
 
-Plaintext
-
 ```
 https://oauth.yandex.ru/authorize?response_type=token&client_id=<ClientID>
 ```
@@ -54,52 +52,97 @@ https://oauth.yandex.ru/authorize?response_type=token&client_id=<ClientID>
 
 ## 🚀 Configuration & Execution
 
-You can provide the token to the application using one of the following methods:
+The application can be executed in two major modes: **Interactive (Dialog)** and **Automated (Config)**.
 
-### Method 1: Environment File (Recommended)
+### Token Resolution Flow (Hybrid Approach)
 
-Create a `.env` file in the same directory where the executable file is located and add your token:
+For both execution modes, the application resolves the OAuth token using a multi-step fallback system:
 
+1. It looks for the corresponding environment variable (`YANDEX_TOKEN` or `GOOGLE_TOKEN`) in the system or a local `.env` file placed next to the executable.
+    
+2. If the variable is missing, the application will not panic; instead, it will gracefully prompt you to enter the token manually in the terminal.
+    
+
+### Execution Mode 1: Interactive (Dialog)
+
+If no `config.json` is found in the application directory, the tool starts in interactive mode.
+
+#### Interactive Flow Steps:
+
+1. **Choose Drive:** Select your cloud provider (Yandex).
+    
+2. **App Token:** Paste your token, or press Enter to fall back to the `.env` file configuration.
+    
+3. **Media Type:** Select the target media category (`Audio`, `Video`, or `Image`). This choice isolates the sync context and determines how files are organized and sorted inside the cloud sandbox.
+    
+4. **Target Directory:** Enter the path to the existing local directory you want to sync.
+    
+    > ⚠️ Note: If the path is empty, does not exist, or points to a file instead of a folder, the application will exit with an error.
+    
+5. **Concurrency:** Set the limit for concurrent requests (Range: 1–10).
+    
+6. **Sync Mode:** Choose between `All` (Download + Upload), `Download` only, or `Upload` only.
+    
+
+### Execution Mode 2: Automated (`config.json`)
+
+#### Configuration Structure
+
+Alternatively, you can automatically generate this file by selecting the setup option during the interactive flow `with config`. This will create a `config.json` file with default values that you can easily adjust later. Upon generation, the application will prompt you to either exit immediately (allowing you to edit the file right away) or continue the current execution in dialog mode.
+
+To create it manually, place a `config.json` file next to your executable:
+
+JSON
 
 ```
-#.env
-YANDEX_TOKEN=your_oauth_token_here
+{
+  "dialog_mode": false,
+  "service": "Yandex",
+  "media_type": "Audio",
+  "audio_dir": "/home/user/Music/My Likes",
+  "video_dir": "/home/user/Videos",
+  "image_dir": "/home/user/Pictures",
+  "mode": "All",
+  "concurrency": 5
+}
 ```
 
-If this file is present, the application automatically reads the token, and you can skip the manual token input prompt by pressing Enter.
+#### Key Config Parameters:
 
-### Method 2: Manual Input
+- `dialog_mode` (boolean): If set to `true`, the application ignores the rest of the config settings and forces the **Interactive Flow** on startup.
+    
+- `media_type`: Determines which local directory mapping will be selected (`Audio` triggers `audio_dir`, etc.) and sets the target category for file sorting within the cloud sandbox.
+    
+- `mode`: Determines the synchronization direction. Allowed values are `"All"` (Download + Upload), `"Download"`, or `"Upload"`.
+    
+- `concurrency`: Must be an integer between 1 and 10.
+    
 
-Run the application and paste your token directly into the terminal prompt when requested.
+> ⚠️ Error Recovery: If `config.json` contains invalid JSON or incorrect parameters, the application will terminate immediately with an error log. To resolve this, you must either fix the configuration file formatting or delete it entirely to return to the default dialog mode.
 
-### Running the Application 
-**1.Compiling:** 
-```bash
+### Running the Application
+
+**1. Compiling:**
+
+Bash
+
+```
 cargo build --release
 ```
 
-After a successful build, the executable file is generated in the `target/release/` directory.
+The standalone executable is generated in the `target/release/` directory.
 
-**2. Portability:** The executable file (`sync_folder` on Linux or `sync_folder.exe` on Windows) is completely standalone. You can safely copy or move this single file to any directory or location on your system and run it from there. All other files generated inside the `target/release/` folder are only needed during the build process and can be ignored or deleted.
+**2. Portability:** The binary (`sync_folder` on Linux, `sync_folder.exe` on Windows) is entirely standalone. You can move this single file to any directory or system location.
 
-**3. Execution:** Go to the directory where you placed your executable file and run it:
+**3. Execution:**
 
-- **On Windows:** Simply double-click the `sync_folder.exe` file, or run it via terminal.
+- **Windows:** Double-click `sync_folder.exe` or execute it via Command Prompt / PowerShell.
     
-- **On Linux:** Open your terminal in the executable's directory and run:
+- **Linux:** Open a terminal in the executable's directory and run:
+    
 
-```bash
-   ./sync_folder
+Bash
+
 ```
-
-### Interactive Flow Steps
-
-1. **Choose Drive:** Select Yandex.
-    
-2. **App Token:** Paste your token or press Enter to fall back to the `.env` file.
-    
-3. **Media Type:** Select the sync target directory (Audio, Video, Image).
-    
-4. **Concurrency:** Set the limit for concurrent requests (Default: 5, range: 1-10).
-    
-5. **Sync Mode:** Choose between `All` (Download + Upload), `Download` only, or `Upload` only.
+./sync_folder
+```

@@ -1,5 +1,5 @@
 use crate::get_reqwest_client;
-use crate::storage::{ save_file, DirNames };
+use crate::storage::{ save_file, MediaType };
 use futures::{ stream, StreamExt };
 use reqwest::header::{ HeaderValue, AUTHORIZATION };
 use reqwest::Method;
@@ -20,11 +20,11 @@ const YANDEX_URL: &str = "https://cloud-api.yandex.net/v1/disk/resources";
 pub struct YandexService {
     token: String,
     concurrency: usize,
-    media_type: DirNames,
+    media_type: MediaType,
 }
 
 impl YandexService {
-    pub fn new(token: String, concurrency: usize, media_type: DirNames) -> Self {
+    pub fn new(token: String, concurrency: usize, media_type: MediaType) -> Self {
         Self { token, concurrency, media_type }
     }
     pub async fn fetch_metadata(
@@ -152,7 +152,11 @@ impl YandexService {
         Ok(result)
     }
 
-    pub async fn download(&self, paths: Vec<CloudItem>) -> Result<(), Box<dyn Error>> {
+    pub async fn download(
+        &self,
+        paths: Vec<CloudItem>,
+        target_dir: &str
+    ) -> Result<(), Box<dyn Error>> {
         let client = Arc::new(get_reqwest_client());
         let base_url = Url::parse("https://cloud-api.yandex.net/v1/disk/resources/download")?;
 
@@ -244,7 +248,7 @@ impl YandexService {
                         file_name
                     );
 
-                    match save_file(cloud_item, bytes).await {
+                    match save_file(cloud_item.name, target_dir, bytes).await {
                         Ok(()) => {
                             println!("[SUCCESS] file is saved successfully: {}", file_name);
                         }
@@ -402,7 +406,7 @@ impl YandexService {
         Ok((status, body))
     }
 
-    async fn create_cloud_dir(&self, dir: DirNames) -> Result<StatusCode, Box<dyn Error>> {
+    async fn create_cloud_dir(&self, dir: MediaType) -> Result<StatusCode, Box<dyn Error>> {
         let mut url = Url::parse(YANDEX_URL)?;
         url.query_pairs_mut()
             .append_pair("limit", LIMIT)
