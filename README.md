@@ -1,6 +1,7 @@
 # Sync Folder CLI
 
-A command-line tool written in Rust for bi-directional file synchronization between a user-defined local directory and cloud storage.
+A command-line tool written in Rust for bi-directional file synchronization between a user-defined local directory and cloud storage. 
+The Android version has been released as a Jetpack Compose project: [Syncer](https://github.com/Sainekt/syncer/).
 
 ## ⚠️ Current Support & Limitations
 
